@@ -1,0 +1,67 @@
+name: Data Analytics CI
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'sql/**/*.sql'
+
+jobs:
+  validate_sql:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: fintec-496811
+
+      # ÉTAPE 1 : Validation structurelle (0 octet scanné, gratuit)
+      - name: BigQuery Dry Run
+        run: |
+          echo "=== ÉTAPE 1 : Dry Run ==="
+          bq query --use_legacy_sql=false --dry_run \
+            "$(cat sql/views/kpi_rolling_avg.sql)"
+
+      # ÉTAPE 2 : Matérialisation dans un dataset de test isolé
+      - name: Create Test Materialization
+        run: |
+          echo "=== ÉTAPE 2 : Matérialisation de test ==="
+          bq query --use_legacy_sql=false \
+            --destination_table=fraud_detection.ci_test_kpi_rolling_avg \
+            --replace=true \
+            "$(cat sql/views/kpi_rolling_avg.sql | sed 's/CREATE OR REPLACE VIEW.*AS//')"
+
+      # ÉTAPE 3 : Assertions de qualité
+      - name: Run Data Quality Assertions
+        run: |
+          echo "=== ÉTAPE 3 : Tests qualité ==="
+
+          ROW_COUNT=$(bq query --use_legacy_sql=false --format=csv \
+            "SELECT COUNT(1) FROM fraud_detection.ci_test_kpi_rolling_avg" \
+            | tail -n +2)
+
+          if [ "$ROW_COUNT" -eq 0 ]; then
+            echo "ERREUR : La requête renvoie 0 ligne !"
+            exit 1
+          fi
+
+          NULL_COUNT=$(bq query --use_legacy_sql=false --format=csv \
+            "SELECT COUNT(1) FROM fraud_detection.ci_test_kpi_rolling_avg WHERE avg_amount_3_tx IS NULL" \
+            | tail -n +2)
+
+          if [ "$NULL_COUNT" -gt 0 ]; then
+            echo "ERREUR : avg_amount_3_tx contient $NULL_COUNT valeurs NULL !"
+            exit 1
+          fi
+
+          echo "Tous les tests qualité sont passés."

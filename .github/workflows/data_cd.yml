@@ -1,0 +1,50 @@
+name: Data Analytics CD
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'sql/**/*.sql'
+
+jobs:
+  deploy_production:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: fintec-496811
+
+      # Déploiement des vues KPI en production
+      - name: Deploy KPI Views to BigQuery
+        run: |
+          echo "Déploiement des vues KPI..."
+          for sql_file in sql/views/*.sql; do
+            echo "  -> $sql_file"
+            bq query --use_legacy_sql=false "$(cat $sql_file)"
+          done
+          echo "Déploiement terminé."
+
+      # Déploiement de l'UDF
+      - name: Deploy UDF
+        run: |
+          echo "Déploiement de GET_TEMPORAL_SCORE..."
+          bq query --use_legacy_sql=false "$(cat sql/udfs/get_temporal_score.sql)"
+          echo "UDF déployée."
+
+      # Déploiement de la procédure stockée
+      - name: Deploy Stored Procedure
+        run: |
+          echo "Déploiement de UPDATE_DAILY_FEATURES..."
+          bq query --use_legacy_sql=false "$(cat sql/procedures/update_daily_features.sql)"
+          echo "Procédure déployée."
